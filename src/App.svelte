@@ -19,26 +19,74 @@
 	// Tone.js volume ranges from -60 dB up to +6 dB.
 	let volume = -6;
 
+	// Single, persistent Volume node:
+	// Will attach it to the Tone.Destination (master output).
+	let volumeNode = new Tone.Volume(volume).toDestination();
+
+	// Build a single, persistent PolySynth, connected to that volume node:
+	let synth = new Tone.PolySynth(Tone.Synth, {
+		oscillator: { type: selectedSound },
+		envelope: { attack: 0.02, release: 1 }
+	}).connect(volumeNode);
+
 	// Some chord "offset templates" in semitones:
-	const chordTemplates = {
+	// const chordTemplates = {
+	// 	major: [
+	// 		[0, 4, 7], // I (major triad)
+	// 		[2, 5, 9], // ii (minor triad) in major scale
+	// 		[4, 7, 11], // iii
+	// 		[5, 9, 12], // IV
+	// 		[7, 11, 14], // V
+	// 		[9, 12, 16], // vi
+	// 		[11, 14, 17] // vii°
+	// 	],
+	// 	minor: [
+	// 		[0, 3, 7], // i
+	// 		[2, 5, 9], // ii°
+	// 		[3, 7, 10], // III
+	// 		[5, 9, 12], // iv
+	// 		[7, 10, 14], // v/V
+	// 		[8, 12, 15], // VI
+	// 		[10, 14, 17] // VII
+	// 	]
+	// };
+
+	const baseChordTemplates = {
 		major: [
-			[0, 4, 7], // I (major triad)
-			[2, 5, 9], // ii (minor triad) in major scale
-			[4, 7, 11], // iii
-			[5, 9, 12], // IV
+			[0, 4, 7],   // I
+			[2, 5, 9],   // ii
+			[4, 7, 11],  // iii
+			[5, 9, 12],  // IV
 			[7, 11, 14], // V
 			[9, 12, 16], // vi
 			[11, 14, 17] // vii°
 		],
 		minor: [
-			[0, 3, 7], // i
-			[2, 5, 9], // ii°
-			[3, 7, 10], // III
-			[5, 9, 12], // iv
-			[7, 10, 14], // v/V
+			[0, 3, 7],   // i
+			[2, 5, 9],   // ii°
+			[3, 7, 10],  // III
+			[5, 9, 12],  // iv
+			[7, 10, 14], // v
 			[8, 12, 15], // VI
 			[10, 14, 17] // VII
 		]
+	};
+
+	function allInversions(triad) {
+		const [r1, r2, r3] = triad;
+		// Root position
+		const rootPos = [r1, r2, r3];
+		// 1st inversion (move bottom note +12)
+		const firstInv = [r2, r3, r1 + 12];
+		// 2nd inversion (move bottom two notes +12)
+		const secondInv = [r3, r1 + 12, r2 + 12];
+
+		return [rootPos, firstInv, secondInv];
+	}
+
+	export const chordTemplates = {
+		major: baseChordTemplates.major.map(triad => allInversions(triad)).flat(),
+		minor: baseChordTemplates.minor.map(triad => allInversions(triad)).flat()
 	};
 
 	let progression = [null, null, null, null];
@@ -46,7 +94,7 @@
 
 	// Piano roll range
 	const pianoRollStart = 60; // C4
-	const pianoRollEnd = 83; // B5
+	const pianoRollEnd = 97; // C#7
 	const totalNotes = pianoRollEnd - pianoRollStart + 1;
 
 	// Convert MIDI number to note name + octave
@@ -85,30 +133,35 @@
 	async function playProgression() {
 		await Tone.start();
 	
-		// Create a Volume node to control the overall volume in dB
+		// Re-configure the synth parameters (in case the user changed wave type, etc.)
+		
 		const volumeNode = new Tone.Volume(volume).toDestination();
-
-		const synth = new Tone.PolySynth(Tone.Synth, {
-		oscillator: { type: selectedSound },
-		envelope: { attack: 0.02, release: 1 }
-		}).connect(volumeNode);
+		synth.set({ oscillator: { type: selectedSound } });
+		// The volumeNode is already connected, but let's update its dB setting just in case:
+		volumeNode.volume.value = volume;
 	
 		let now = Tone.now();
 		for (let i = 0; i < progression.length; i++) {
-		if (progression[i] !== null) {
-			const chordNotes = progression[i].map(m => Tone.Frequency(m, 'midi').toNote());
-			synth.triggerAttackRelease(chordNotes, 1.8, now);
-		}
+			if (progression[i] !== null) {
+				const chordNotes = progression[i].map(m => Tone.Frequency(m, 'midi').toNote());
+				synth.triggerAttackRelease(chordNotes, 1.8, now);
+			}
 		now += 2; // Play for 2 seconds
 		}
 	}
+
+	// Reactively update volume in real time
+	// Whenever `volume` changes in Svelte, update the volumeNode
+	$: volumeNode && (volumeNode.volume.value = volume);
+	// Whenever `selectedSound` changes, update the synth oscillator type
+	$: synth && synth.set({ oscillator: { type: selectedSound } });
 
 	// Svelte lifecycle + initial roll
 	onMount(() => {
 		rollProgression();
 	});
 </script>
-	
+
 <style>
 	.container {
 		display: flex;
@@ -119,6 +172,12 @@
 		font-family: sans-serif;
 	}
 	.controls {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		align-items: center;
+	}
+	.chords {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
@@ -217,14 +276,16 @@
 		min="-60" max="0" step="1"
 		bind:value={volume}
 		/>
+	</div>
 
+	<!-- Chord lock/unlock row -->
+	<div class="controls">
 		<!-- Roll and Play -->
 		<button on:click={rollProgression}>🎲 Roll</button>
 		<button on:click={playProgression}>▶ Play</button>
 	</div>
 
-	<!-- Chord lock/unlock row -->
-	<div class="controls">
+	<div class="chords">
 		{#each progression as chord, i}
 		<button
 			class={locked[i] ? 'locked' : ''}
