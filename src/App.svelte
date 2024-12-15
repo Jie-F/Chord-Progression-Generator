@@ -8,10 +8,7 @@
 	let selectedRoot = 'C';
 	let selectedScale = 'Major';
 
-	// -------------------------------------------
-	// 2) Sound options
-	// -------------------------------------------
-	// Let's define several oscillator types
+	// Oscillator types
 	const soundOptions = ['sine', 'triangle', 'square', 'sawtooth'];
 	let selectedSound = 'triangle';    // default
 
@@ -127,27 +124,78 @@
 		});
 	}
 
-	// -------------------------------------------
-	// Play chords in succession
-	// -------------------------------------------
-	async function playProgression() {
+	// Play/Stop logic + playhead animation
+	let isPlaying = false;
+	let playheadPosition = 0;  // 0-100
+	let animationFrame = null;
+	let chordTimeouts = [];
+
+	function getTotalPlayTime() {
+		return progression.length * 2; // 2s per chord
+	}
+
+	function togglePlay() {
+		if (isPlaying) {
+			stopPlayback();
+		} else {
+			startPlayback();
+		}
+	}
+
+	async function startPlayback() {
 		await Tone.start();
-	
-		// Re-configure the synth parameters (in case the user changed wave type, etc.)
-		
-		const volumeNode = new Tone.Volume(volume).toDestination();
+		isPlaying = true;
+		playheadPosition = 0;
+
 		synth.set({ oscillator: { type: selectedSound } });
-		// The volumeNode is already connected, but let's update its dB setting just in case:
 		volumeNode.volume.value = volume;
-	
-		let now = Tone.now();
+
+		let startTime = performance.now();
+		let totalTimeMs = getTotalPlayTime() * 1000;
+
+		// schedule chords via setTimeout
+		chordTimeouts = [];
 		for (let i = 0; i < progression.length; i++) {
 			if (progression[i] !== null) {
 				const chordNotes = progression[i].map(m => Tone.Frequency(m, 'midi').toNote());
-				synth.triggerAttackRelease(chordNotes, 1.8, now);
+				let chordTime = i * 2000; // ms offset
+				let tHandle = setTimeout(() => {
+					synth.triggerAttackRelease(chordNotes, 1.8, Tone.now());
+				}, chordTime);
+				chordTimeouts.push(tHandle);
 			}
-		now += 2; // Play for 2 seconds
 		}
+
+		// animate playhead
+		function animatePlayhead() {
+			if (!isPlaying) return;
+			let elapsed = performance.now() - startTime;
+			let ratio = elapsed / totalTimeMs;
+			if (ratio >= 1) {
+				playheadPosition = 100;  // end
+				isPlaying = false;
+				return;
+			} else {
+				playheadPosition = ratio * 100;
+				animationFrame = requestAnimationFrame(animatePlayhead);
+			}
+		}
+		animationFrame = requestAnimationFrame(animatePlayhead);
+	}
+
+	function stopPlayback() {
+		for (let t of chordTimeouts) {
+			clearTimeout(t);
+		}
+		chordTimeouts = [];
+		if (animationFrame) {
+			cancelAnimationFrame(animationFrame);
+			animationFrame = null;
+		}
+		synth.releaseAll();
+
+		isPlaying = false;
+		playheadPosition = 0;
 	}
 
 	// Reactively update volume in real time
@@ -171,13 +219,7 @@
 		margin: 1rem auto;
 		font-family: sans-serif;
 	}
-	.controls {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		align-items: center;
-	}
-	.chords {
+	.controls, .chords {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 0.5rem;
@@ -190,22 +232,26 @@
 	.locked {
 		opacity: 0.6;
 	}
-	
-	/* The main "piano roll" container: We have 1 column for the piano keys, plus 4 columns for the chords => 5 columns total. */
+
+	.volume-slider {
+		margin-left: 1rem;
+		width: 100px;
+	}
+
+	/* The main container: 2 columns. 
+	   1) piano-key-column, 2) chord-columns. */
 	.piano-roll-container {
 		display: grid;
-		grid-template-columns: auto repeat(4, 1fr); /* first column = piano keys, then 4 chord columns */
+		grid-template-columns: auto 1fr; /* left auto, right takes the rest */
 		border: 1px solid #ddd;
 	}
-	
-	/* The piano-key-column has the same number of rows as our note grid. */
+
 	.piano-key-column {
 		display: grid;
 		grid-template-rows: repeat(var(--rows), 1em);
 		border-right: 2px solid #aaa;
 	}
 	.piano-key {
-		position: relative;
 		display: flex;
 		align-items: center;
 		justify-content: flex-end;
@@ -213,12 +259,13 @@
 		border-bottom: 1px solid #eee;
 		font-size: 0.8rem;
 	}
-	.black-key {
-		background: #444;
-		color: white;
-	}
-	.white-key {
-		background: #fafafa;
+	.black-key { background: #444; color: white; }
+	.white-key { background: #fafafa; }
+
+	.chord-columns {
+		position: relative;
+		display: grid;
+		grid-template-columns: repeat(4, 1fr); /* 4 chords */
 	}
 
 	.piano-column {
@@ -232,11 +279,18 @@
 		background-color: white;
 	}
 	.piano-note.active {
-		background-color: rgb(255, 149, 0);
+		background-color: rgb(173, 118, 255);
 	}
-	.volume-slider {
-		margin-left: 1rem;
-		width: 100px;
+
+	.playhead-line {
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 2px;
+		background: rgb(93, 0, 127);
+		left: 0;  /* animate left in a style attribute binding */
+		pointer-events: none;
+		z-index: 999;
 	}
 </style>
 
@@ -280,11 +334,15 @@
 
 	<!-- Chord lock/unlock row -->
 	<div class="controls">
-		<!-- Roll and Play -->
 		<button on:click={rollProgression}>🎲 Roll</button>
-		<button on:click={playProgression}>▶ Play</button>
+		<button on:click={togglePlay}>
+			{#if isPlaying}
+				■ Stop
+			{:else}
+				▶ Play
+			{/if}
+		</button>
 	</div>
-
 	<div class="chords">
 		{#each progression as chord, i}
 		<button
@@ -296,30 +354,34 @@
 		{/each}
 	</div>
 
-	<!-- Piano roll visualization: First column: vertical piano keys. Next 4 columns: chord grid 
-		 Define --rows in the style so each "row" is 1em high. 
-		 Top row is the highest note (pianoRollEnd), and the bottom row is the lowest (pianoRollStart).
-	-->
+	<!-- Piano roll visualization -->
 	<div class="piano-roll-container" style="--rows: {totalNotes};">
-		<!-- Left piano keys column -->
+		<!-- Left column: piano keys -->
 		<div class="piano-key-column">
-		{#each Array(totalNotes) as _, rowIndex}
-		<div class="piano-key {isBlackKey(pianoRollEnd - rowIndex) ? 'black-key' : 'white-key'}">
-			{midiToNoteName(pianoRollEnd - rowIndex)}
+			{#each Array(totalNotes) as _, rowIndex}
+				<div class="piano-key {isBlackKey(pianoRollEnd - rowIndex) ? 'black-key' : 'white-key'}">
+					{midiToNoteName(pianoRollEnd - rowIndex)}
+				</div>
+			{/each}
 		</div>
-		{/each}
-	</div>
 
-	<!-- Four chord columns -->
-		{#each progression as chord, colIndex}
-			<div class="piano-column">
-				{#each Array(totalNotes) as _, rowIndex}
-					<!-- The 'active' cell if chord includes this note's MIDI. -->
-					<div
-					class="piano-note {chord && chord.includes(pianoRollEnd - rowIndex) ? 'active' : ''}"
-					/>
-				{/each}
-			</div>
-		{/each}
+		<!-- Right columns: chord grid + playhead line -->
+		<div class="chord-columns">
+			<!-- The vertical red line, absolutely positioned, left: {playheadPosition}% -->
+			<div
+				class="playhead-line"
+				style="left: {playheadPosition}%;"
+			></div>
+
+			{#each progression as chord, colIndex}
+				<div class="piano-column">
+					{#each Array(totalNotes) as _, rowIndex}
+						<div
+							class="piano-note {chord && chord.includes(pianoRollEnd - rowIndex) ? 'active' : ''}"
+						/>
+					{/each}
+				</div>
+			{/each}
+		</div>
 	</div>
 </div>
