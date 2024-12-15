@@ -122,6 +122,10 @@
 		const randomTemplate = templateArray[Math.floor(Math.random() * templateArray.length)];
 		return randomTemplate.map(offset => rootMidi + offset);
 		});
+		// Don't keep playing if it's playing
+		if (isPlaying) {
+			stopPlayback();
+		}
 	}
 
 	// Play/Stop logic + playhead animation
